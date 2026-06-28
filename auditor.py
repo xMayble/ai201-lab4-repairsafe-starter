@@ -1,7 +1,7 @@
 import json
 import os
-from datetime import datetime
-from config import LOG_FILE
+from datetime import datetime, timezone
+from config import LOG_FILE, LLM_MODEL
 
 
 def log_interaction(question: str, tier: str, response: str) -> None:
@@ -31,4 +31,24 @@ def log_interaction(question: str, tier: str, response: str) -> None:
 
     Design your log entry in specs/auditor-spec.md before implementing here.
     """
-    pass
+    # Build the structured record. Question is capped at 300 chars, the response
+    # preview at 200 — but we keep the full length separately for diagnostics.
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "tier": tier,
+        "question": question[:300],
+        "response_preview": response[:200],
+        "model": LLM_MODEL,
+        "response_length": len(response),
+    }
+
+    # Self-heal: create logs/ if it doesn't exist so logging never crashes the app.
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
+    # Append one JSON object per line (JSONL) — never rewrite the whole file.
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+    # One-line terminal summary so logged interactions are visible in real time.
+    q_preview = question[:50] + ("..." if len(question) > 50 else "")
+    print(f'[LOGGED] tier={tier} | "{q_preview}" | {len(response)} chars')

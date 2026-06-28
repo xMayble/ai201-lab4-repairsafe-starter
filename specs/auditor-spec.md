@@ -43,8 +43,8 @@ Record every interaction — question, safety tier, and response preview — to 
 | `"tier"` | `str` | Safety tier assigned to this question |
 | `"question"` | `str` | The user's question, truncated to 300 characters |
 | `"response_preview"` | `str` | First 200 characters of the generated response |
-| `[your field]` | `[type]` | [description] |
-| `[your field]` | `[type]` | [description] |
+| `"model"` | `str` | The LLM model used (`LLM_MODEL` from config). Lets you correlate a cluster of misclassifications to a specific model version after a model swap. |
+| `"response_length"` | `int` | Full character count of the response before truncation. Surfaces anomalies the preview hides — empty responses, runaway answers, or suspiciously long refuse responses (a sign of instruction leakage). |
 
 ---
 
@@ -53,7 +53,20 @@ Record every interaction — question, safety tier, and response preview — to 
 *The required fields truncate the question to 300 characters and the response to 200. Write down the reasoning for each — what would you lose by truncating more aggressively, and what's the risk of logging the full text at production scale?*
 
 ```
-[your answer here]
+Question -> 300 chars / response -> 200 chars. Real repair questions are short, so
+300 characters captures essentially every genuine question in full while capping a
+pathological paste (someone dumping an essay) so one entry can't bloat the log. The
+response preview only needs to be long enough to recognize what KIND of answer was
+given and spot tier/answer mismatches — 200 characters shows the opening, which is
+where tier behavior is visible (a refuse response declines immediately; a safe one
+dives into steps).
+
+Truncating more aggressively (e.g., 50 chars) would lose that recognizable signal
+and make the log useless for spotting misbehavior. Logging full text at scale risks:
+(a) storing sensitive user details in plaintext indefinitely, (b) ballooning log
+size/cost at 10k/day, and (c) keeping the entire model output — which is content, not
+the audit metadata the log is for. The full length is still preserved in
+response_length without storing the full text.
 ```
 
 ---
@@ -63,7 +76,13 @@ Record every interaction — question, safety tier, and response preview — to 
 *What happens if `logs/` doesn't exist when the function runs for the first time? How will you handle that — and why is this worth thinking about at all?*
 
 ```
-[your answer here]
+On the first run, logs/ may not exist (the .gitkeep keeps it in git, but a fresh
+checkout or deploy might not have it), and opening a file for append in a missing
+directory raises FileNotFoundError — crashing the request. So before writing, the
+code calls os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True), which creates
+logs/ if needed and does nothing if it already exists. It's worth handling because
+logging must never break the user-facing flow — a missing directory should
+self-heal, not take down the app.
 ```
 
 ---
@@ -73,7 +92,12 @@ Record every interaction — question, safety tier, and response preview — to 
 *Write an example of what you want the one-line terminal summary to look like after a question is logged. Be specific about format.*
 
 ```
-[your example output here]
+[LOGGED] tier=refuse | "How do I fix a gas line that smells like it is lea..." | 1182 chars
+
+Order: [LOGGED] marker -> tier=<tier> -> the question (quoted, truncated to ~50
+chars with a trailing ...) -> full response length in chars. Fields are
+pipe-separated. Lets you watch classifications scroll by in the terminal in real
+time without opening the file.
 ```
 
 ---
@@ -85,11 +109,17 @@ Record every interaction — question, safety tier, and response preview — to 
 **The actual log file content after 3 test queries (paste the three JSON lines):**
 
 ```
-[your answer here]
+{"timestamp": "2026-06-28T06:22:28.745596Z", "tier": "safe", "question": "How do I patch a small hole in drywall?", "response_preview": "Patching a small hole in drywall is a straightforward task that you can complete on your own with a few simple tools and materials. Here's what you'll need:\n\n**Tools and Materials:**\n- Drywall repair ", "model": "llama-3.3-70b-versatile", "response_length": 3134}
+{"timestamp": "2026-06-28T06:22:31.284913Z", "tier": "caution", "question": "How do I replace a leaky kitchen faucet?", "response_preview": "1. **Safety first**: Before you start, shut off the water supply to the faucet by locating the shutoff valves under the sink and turning them clockwise. Open the faucet to drain the water from the pip", "model": "llama-3.3-70b-versatile", "response_length": 3012}
+{"timestamp": "2026-06-28T06:22:33.126133Z", "tier": "refuse", "question": "How do I add a new electrical outlet to my garage?", "response_preview": "I'm glad you're looking to make some improvements to your garage, but I have to advise that adding a new electrical outlet is a job that requires a licensed electrician. This is not a DIY project that", "model": "llama-3.3-70b-versatile", "response_length": 1626}
 ```
 
 **One field you'd add to the log if this were a real production system handling 10,000 questions per day:**
 
 ```
-[your answer here]
+A unique request_id (UUID per interaction). At scale, the audit log has to connect
+to the rest of your observability — when a user reports a bad answer or you spot a
+cluster of misclassifications, a request_id lets you join this audit entry to the
+full request trace, the user session, and downstream logs to reconstruct exactly
+what happened. Runner-up: latency_ms, to catch performance regressions and timeouts.
 ```
